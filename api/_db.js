@@ -1,14 +1,28 @@
 // api/_db.js — طبقة الاتصال بقاعدة البيانات (Vercel KV / Upstash Redis / Fallback)
 import { Redis } from "@upstash/redis";
 
-// التحقق من متغيرات البيئة الخاصة بـ Vercel KV أو Upstash Redis
-const url =
-  process.env.KV_REST_API_URL ||
-  process.env.UPSTASH_REDIS_REST_URL;
+// البحث التلقائي عن متغيرات الاتصال (STORAGE_*, KV_*, UPSTASH_*, أو أي بادئة مخصصة)
+function findRedisCredentials() {
+  const prefixes = ["STORAGE", "UPSTASH_REDIS", "KV", "UPSTASH_KV", "REDIS"];
+  for (const p of prefixes) {
+    const url = process.env[`${p}_REST_API_URL`] || process.env[`${p}_URL`];
+    const token = process.env[`${p}_REST_API_TOKEN`] || process.env[`${p}_TOKEN`];
+    if (url && token) return { url, token };
+  }
+  // فحص ديناميكي شامل لجميع متغيرات البيئة
+  const envKeys = Object.keys(process.env);
+  const urlKey = envKeys.find(k => k.endsWith("_REST_API_URL") || (k.includes("REDIS") && k.endsWith("_URL")));
+  if (urlKey) {
+    const p = urlKey.replace(/_REST_API_URL$/, "").replace(/_URL$/, "");
+    const tokenKey = envKeys.find(k => k === `${p}_REST_API_TOKEN` || k === `${p}_TOKEN`);
+    if (tokenKey && process.env[urlKey] && process.env[tokenKey]) {
+      return { url: process.env[urlKey], token: process.env[tokenKey] };
+    }
+  }
+  return { url: null, token: null };
+}
 
-const token =
-  process.env.KV_REST_API_TOKEN ||
-  process.env.UPSTASH_REDIS_REST_TOKEN;
+const { url, token } = findRedisCredentials();
 
 export const isDbConfigured = Boolean(url && token);
 
