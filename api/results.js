@@ -1,5 +1,4 @@
-// api/results.js — جلب نتائج الاستطلاع للمسؤول مع حفظ الخصوصية
-import { kv, isDbConfigured } from "./_db.js";
+import { kv, isDbConfigured, dbInfo } from "./_db.js";
 
 const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || "Kayan1234";
 
@@ -51,7 +50,8 @@ export default async function handler(req, res) {
       ok: true,
       rows: clean,
       total: clean.length,
-      isDbConfigured
+      isDbConfigured,
+      dbInfo
     });
   } catch (err) {
     console.error("results error:", err);

@@ -1,28 +1,90 @@
 // api/_db.js — طبقة الاتصال بقاعدة البيانات (Vercel KV / Upstash Redis / Fallback)
 import { Redis } from "@upstash/redis";
 
-// البحث التلقائي عن متغيرات الاتصال (STORAGE_*, KV_*, UPSTASH_*, أو أي بادئة مخصصة)
+// البحث الذكي الشامل عن بيانات اتصال Redis أياً كانت التسمية أو البادئة
 function findRedisCredentials() {
-  const prefixes = ["STORAGE", "UPSTASH_REDIS", "KV", "UPSTASH_KV", "REDIS"];
-  for (const p of prefixes) {
-    const url = process.env[`${p}_REST_API_URL`] || process.env[`${p}_URL`];
-    const token = process.env[`${p}_REST_API_TOKEN`] || process.env[`${p}_TOKEN`];
-    if (url && token) return { url, token };
-  }
-  // فحص ديناميكي شامل لجميع متغيرات البيئة
-  const envKeys = Object.keys(process.env);
-  const urlKey = envKeys.find(k => k.endsWith("_REST_API_URL") || (k.includes("REDIS") && k.endsWith("_URL")));
-  if (urlKey) {
-    const p = urlKey.replace(/_REST_API_URL$/, "").replace(/_URL$/, "");
-    const tokenKey = envKeys.find(k => k === `${p}_REST_API_TOKEN` || k === `${p}_TOKEN`);
-    if (tokenKey && process.env[urlKey] && process.env[tokenKey]) {
-      return { url: process.env[urlKey], token: process.env[tokenKey] };
+  const env = process.env;
+
+  // 1. فحص شامل للبحث عن أي متغير يحتوي على نطاق upstash أو vercel-storage
+  for (const [key, val] of Object.entries(env)) {
+    if (typeof val === "string" && (val.includes(".upstash.io") || val.includes(".vercel-storage.com"))) {
+      // إذا كان الرابط REST مباشر (https://)
+      if (val.startsWith("https://")) {
+        const prefix = key.replace(/(_REST_API_URL|_URL)$/, "");
+        const token =
+          env[`${prefix}_REST_API_TOKEN`] ||
+          env[`${prefix}_TOKEN`] ||
+          env[`${prefix}_REST_API_READ_ONLY_TOKEN`] ||
+          env["STORAGE_REST_API_TOKEN"] ||
+          env["STORAGE_TOKEN"] ||
+          env["UPSTASH_REDIS_REST_TOKEN"] ||
+          env["KV_REST_API_TOKEN"];
+
+        if (token) {
+          return { url: val, token, detectedKey: key };
+        }
+      }
+
+      // إذا كان الرابط بصيغة TCP Redis (rediss://default:token@host:6379)
+      if (val.startsWith("redis://") || val.startsWith("rediss://")) {
+        try {
+          const parsed = new URL(val);
+          if (parsed.hostname && parsed.password) {
+            return {
+              url: `https://${parsed.hostname}`,
+              token: parsed.password,
+              detectedKey: `${key} (parsed from connection string)`
+            };
+          }
+        } catch (e) {}
+      }
     }
   }
-  return { url: null, token: null };
+
+  // 2. فحص البوادئ الشائعة (STORAGE_*, UPSTASH_*, KV_*, إلخ)
+  const prefixes = [
+    "STORAGE",
+    "STORAGE_UPSTASH_REDIS",
+    "STORAGE_KV",
+    "UPSTASH_REDIS",
+    "KV",
+    "UPSTASH_KV",
+    "REDIS"
+  ];
+
+  for (const p of prefixes) {
+    const rawUrl = env[`${p}_REST_API_URL`] || env[`${p}_URL`];
+    const rawToken = env[`${p}_REST_API_TOKEN`] || env[`${p}_TOKEN`];
+
+    if (rawUrl && rawToken && typeof rawUrl === "string" && rawUrl.startsWith("https://")) {
+      return { url: rawUrl, token: rawToken, detectedKey: p };
+    }
+
+    if (rawUrl && typeof rawUrl === "string" && (rawUrl.startsWith("redis://") || rawUrl.startsWith("rediss://"))) {
+      try {
+        const parsed = new URL(rawUrl);
+        if (parsed.hostname && parsed.password) {
+          return {
+            url: `https://${parsed.hostname}`,
+            token: parsed.password,
+            detectedKey: `${p}_URL (parsed)`
+          };
+        }
+      } catch (e) {}
+    }
+  }
+
+  // 3. فحص أي مفتاح ينتهي بـ _REST_API_URL
+  const urlKey = Object.keys(env).find(k => k.endsWith("_REST_API_URL"));
+  if (urlKey) {
+    const tokenKey = urlKey.replace(/_REST_API_URL$/, "_REST_API_TOKEN");
+    if (env[tokenKey]) return { url: env[urlKey], token: env[tokenKey], detectedKey: urlKey };
+  }
+
+  return { url: null, token: null, detectedKey: null };
 }
 
-const { url, token } = findRedisCredentials();
+const { url, token, detectedKey } = findRedisCredentials();
 
 export const isDbConfigured = Boolean(url && token);
 
@@ -36,7 +98,7 @@ if (isDbConfigured) {
   }
 }
 
-// مخزن ذاكرة احتياطي (In-Memory Fallback) للاختبار المحلي والتطوير في حال عدم ربط قاعدة البيانات
+// مخزن ذاكرة احتياطي (In-Memory Fallback) للاختبار المحلي
 class MemoryStore {
   constructor() {
     this.store = new Map();
@@ -73,3 +135,11 @@ if (!globalStore.__surveyMemoryStore) {
 }
 
 export const kv = dbClient || globalStore.__surveyMemoryStore;
+
+export const dbInfo = {
+  isConfigured: isDbConfigured,
+  detectedKey: detectedKey || "none",
+  matchedKeys: Object.keys(process.env).filter(k =>
+    k.includes("STORAGE") || k.includes("REDIS") || k.includes("KV") || k.includes("URL") || k.includes("TOKEN")
+  )
+};

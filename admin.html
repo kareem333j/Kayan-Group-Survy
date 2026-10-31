@@ -99,6 +99,7 @@ ul.txt li{padding:10px 12px;margin-bottom:8px;background:var(--bg);border-radius
     <div class="tools">
       <button class="btn alt" id="csv" type="button">تصدير CSV</button>
       <button class="btn alt" id="refresh" type="button">تحديث</button>
+      <button class="btn alt" id="logoutBtn" type="button" style="color:var(--err);border-color:var(--err)">تسجيل خروج</button>
     </div>
   </div>
 
@@ -184,15 +185,18 @@ function load(pw){
     return {
       demo:false,
       rows:Array.isArray(j)?j:(j.rows||j.results||[]),
-      isDbConfigured: !!(j && j.isDbConfigured)
+      isDbConfigured: !!(j && j.isDbConfigured),
+      dbInfo: j && j.dbInfo
     };
   });
 }
 
-function fetchSettings(dbFlag){
+var DB_INFO = null;
+function fetchSettings(dbFlag, info){
   if(dbFlag !== undefined) IS_DB_CONFIGURED = dbFlag;
+  if(info !== undefined) DB_INFO = info;
   if(!CONFIG.settingsEndpoint || !PW) {
-    renderSettings(IS_DB_CONFIGURED);
+    renderSettings(IS_DB_CONFIGURED, DB_INFO);
     return Promise.resolve();
   }
   return fetch(CONFIG.settingsEndpoint, {
@@ -203,11 +207,11 @@ function fetchSettings(dbFlag){
     if(res && res.settings){
       CURRENT_SETTINGS = res.settings;
       if(res.isDbConfigured !== undefined) IS_DB_CONFIGURED = res.isDbConfigured;
-      renderSettings(IS_DB_CONFIGURED);
+      renderSettings(IS_DB_CONFIGURED, DB_INFO);
     }
   }).catch(function(e){
     console.error("fetchSettings error:", e);
-    renderSettings(IS_DB_CONFIGURED);
+    renderSettings(IS_DB_CONFIGURED, DB_INFO);
   });
 }
 
@@ -252,14 +256,14 @@ function updateSettings(patch){
   });
 }
 
-function renderSettings(dbFlag){
+function renderSettings(dbFlag, dbInfo){
   var dbBadge = document.getElementById("dbBadge");
   if(dbFlag){
     dbBadge.className = "badge cloud";
     dbBadge.textContent = "قاعدة البيانات: سحابية متصلة ✓";
   } else {
     dbBadge.className = "badge local";
-    dbBadge.textContent = "قاعدة البيانات: تجريبي / محلي";
+    dbBadge.textContent = "قاعدة البيانات: تجريبي / محلي (اضغط Redeploy على Vercel)";
   }
 
   var statusBadge = document.getElementById("statusBadge");
@@ -306,12 +310,13 @@ function enter(pw){
   var err=document.getElementById("lerr"); err.textContent="";
   return load(pw).then(function(res){
     PW = pw;
+    try { localStorage.setItem("kayan_admin_pw", pw); } catch(e){}
     DATA = shuffle(res.rows.map(norm));
     document.getElementById("loginView").classList.add("hide");
     document.getElementById("dash").classList.remove("hide");
     document.getElementById("demoNote").classList.toggle("hide", !res.demo);
     renderAll();
-    fetchSettings(res.isDbConfigured);
+    fetchSettings(res.isDbConfigured, res.dbInfo);
   }).catch(function(e){
     err.textContent = e.message==="auth" ? "كلمة المرور غير صحيحة." : "تعذّر تحميل البيانات. تأكد من الاتصال وحاول مجدداً.";
   });
@@ -319,6 +324,24 @@ function enter(pw){
 document.getElementById("lf").addEventListener("submit",function(e){ e.preventDefault(); enter(document.getElementById("pw").value); });
 document.getElementById("refresh").addEventListener("click",function(){ enter(PW); });
 document.getElementById("q").addEventListener("input",function(){ renderTexts(); renderAll_list(); });
+
+// استعادة الجلسة تلقائياً عند تحديث الصفحة (Reload) لمنع تسجيل الخروج المفاجئ
+try {
+  var savedPw = localStorage.getItem("kayan_admin_pw");
+  if(savedPw) {
+    document.getElementById("pw").value = savedPw;
+    enter(savedPw);
+  }
+} catch(e){}
+
+// زر تسجيل الخروج
+document.getElementById("logoutBtn").addEventListener("click", function(){
+  try { localStorage.removeItem("kayan_admin_pw"); } catch(e){}
+  PW = "";
+  document.getElementById("dash").classList.add("hide");
+  document.getElementById("loginView").classList.remove("hide");
+  document.getElementById("pw").value = "";
+});
 
 document.getElementById("toggleStatusBtn").addEventListener("click", function(){
   var now = new Date();
